@@ -1,170 +1,162 @@
 const koffi = require('koffi');
 const config = require('../config/appConfig');
+const constants = require('../config/constants');
 const fs = require('fs');
 
+// --- Definição de Tipos e DLL ---
 let libFutronic = null;
+let ftrFuncs = {}; // Objeto para guardar as funções carregadas
 
-// --- Carregamento da DLL ---
-try {
-    if (fs.existsSync(config.dllPath)) {
-        libFutronic = koffi.load(config.dllPath);
-    } else {
-        console.warn(`⚠️ DLL não encontrada em: ${config.dllPath}`);
-    }
-} catch (error) {
-    console.error("❌ Erro ao carregar DLL:", error.message);
-}
-
-// --- Mapeamento de Funções ---
-let ftrScanOpenDevice = null;
-let ftrScanCloseDevice = null;
-let ftrScanIsFingerPresent = null;
-let ftrScanGetImage = null;
-let ftrScanSetDiodesStatus = null;
-
-if (libFutronic) {
+// Helper para carregar a DLL de forma segura
+function loadDriver() {
     try {
-        // Funções Básicas
-        ftrScanOpenDevice = libFutronic.func('void* ftrScanOpenDevice()');
-        ftrScanCloseDevice = libFutronic.func('bool ftrScanCloseDevice(void* hDevice)');
-        ftrScanIsFingerPresent = libFutronic.func('bool ftrScanIsFingerPresent(void* hDevice, void* pFrameParams)');
-        ftrScanSetDiodesStatus = libFutronic.func('bool ftrScanSetDiodesStatus(void* hDevice, char byGreen, char byRed)');
+        if (!fs.existsSync(config.dllPath)) {
+            console.warn(`[Driver] DLL não encontrada em: ${config.dllPath}`);
+            return false;
+        }
 
-        // Função de Imagem
-        // bool ftrScanGetImage(void *hDevice, int nDose, void *pBuffer);
-        ftrScanGetImage = libFutronic.func('bool ftrScanGetImage(void* hDevice, int nDose, _Out_ uint8_t* pBuffer)');
+        libFutronic = koffi.load(config.dllPath);
 
-    } catch (err) {
-        console.error("Erro ao mapear funções:", err.message);
+        // Mapeamento das funções (Sintaxe Koffi 2.9+)
+        ftrFuncs = {
+            openDevice: libFutronic.func('void* ftrScanOpenDevice()'),
+            closeDevice: libFutronic.func('bool ftrScanCloseDevice(void* hDevice)'),
+            isFingerPresent: libFutronic.func('bool ftrScanIsFingerPresent(void* hDevice, void* pFrameParams)'),
+            setDiodesStatus: libFutronic.func('bool ftrScanSetDiodesStatus(void* hDevice, char byGreen, char byRed)'),
+            getImage: libFutronic.func('bool ftrScanGetImage(void* hDevice, int nDose, _Out_ uint8_t* pBuffer)')
+        };
+
+        return true;
+    } catch (error) {
+        console.error("[Driver] Erro crítico ao carregar DLL:", error.message);
+        return false;
     }
 }
+
+// Tenta carregar ao iniciar
+const isDriverLoaded = loadDriver();
+
+// --- Funções Auxiliares ---
+
+// Gera o cabeçalho BMP para exibir a imagem no navegador
+function createBMPHeader(width, height) {
+    const fileSize = 54 + 1024 + (width * height);
+    const buffer = Buffer.alloc(1078);
+
+    buffer.write('BM');
+    buffer.writeUInt32LE(fileSize, 2);
+    buffer.writeUInt32LE(54 + 1024, 10);
+    buffer.writeUInt32LE(40, 14);
+    buffer.writeUInt32LE(width, 18);
+    buffer.writeInt32LE(-height, 22); // Negativo para Top-Down
+    buffer.writeUInt16LE(1, 26);
+    buffer.writeUInt16LE(8, 28);
+    buffer.writeUInt32LE(0, 30);
+    buffer.writeUInt32LE(width * height, 34);
+    buffer.writeUInt32LE(0, 46);
+
+    // Paleta Grayscale
+    for (let i = 0; i < 256; i++) {
+        const offset = 54 + i * 4;
+        buffer[offset] = buffer[offset + 1] = buffer[offset + 2] = i;
+    }
+    return buffer;
+}
+
+// --- Serviço Principal ---
 
 module.exports = {
     capturarDigital: async () => {
-        if (!libFutronic || !ftrScanOpenDevice) throw new Error("Driver DLL não carregado.");
+        // Modo Mock (Desenvolvimento)
+        if (config.useMock || !isDriverLoaded) {
+            console.log("[Mock] Simulando captura...");
+            return new Promise(resolve => setTimeout(() => {
+                resolve({
+                    status: constants.FUTRONIC.STATUS_OK,
+                    template: "MOCK_TEMPLATE_" + Date.now(),
+                    image: null // Sem imagem no mock simples
+                });
+            }, 2000));
+        }
 
         return new Promise(async (resolve, reject) => {
             let hDevice = null;
 
             try {
-                console.log("🔌 Conectando...");
-                hDevice = ftrScanOpenDevice();
+                // 1. Abrir Dispositivo
+                hDevice = ftrFuncs.openDevice();
 
                 if (!hDevice || koffi.address(hDevice) === 0n) {
-                    return reject(new Error("Falha ao abrir leitor."));
+                    return reject(new Error("Falha ao abrir leitor. Verifique conexão USB."));
                 }
 
-                console.log("✅ Conectado. Ligando sensores...");
-                try { ftrScanSetDiodesStatus(hDevice, 50, 0); } catch(e) {}
-
-                console.log("👆 Aguardando dedo...");
+                // 2. Feedback Visual (LED)
+                try {
+                    ftrFuncs.setDiodesStatus(hDevice, constants.FUTRONIC.LED_INTENSITY, 0);
+                } catch (e) { /* Ignora erro de LED */ }
 
                 let attempts = 0;
-                const maxAttempts = 20;
 
+                // 3. Loop de Espera (Polling)
                 const checkFinger = setInterval(() => {
                     attempts++;
-                    const hasFinger = ftrScanIsFingerPresent(hDevice, null);
+
+                    const hasFinger = ftrFuncs.isFingerPresent(hDevice, null);
 
                     if (hasFinger) {
                         clearInterval(checkFinger);
-                        console.log("✨ DEDO DETECTADO! Capturando imagem...");
 
+                        // --- Captura Real ---
                         try {
-                            // --- CORREÇÃO DO CRASH ---
-                            // O FS88H tem resolução padrão de 320x480.
-                            // Tamanho necessário = 320 * 480 = 153.600 bytes.
-                            // Vamos alocar um pouco mais para garantir segurança.
-                            const width = 320;
-                            const height = 480;
-                            const bufferSize = width * height;
-
-                            console.log(`   Alocando Buffer Seguro: ${bufferSize} bytes`);
-
-                            // Aloca memória suficiente para não estourar
+                            const { FRAME_WIDTH, FRAME_HEIGHT } = constants.FUTRONIC;
+                            const bufferSize = FRAME_WIDTH * FRAME_HEIGHT;
                             const imageBuffer = new Uint8Array(bufferSize);
 
-                            // Captura a imagem (Dose 4)
-                            const successCapture = ftrScanGetImage(hDevice, 4, imageBuffer);
+                            // nDose = 4 (Padrão)
+                            const captured = ftrFuncs.getImage(hDevice, 4, imageBuffer);
 
-                            if (!successCapture) throw new Error("Falha ao capturar pixels da imagem.");
+                            if (!captured) throw new Error("Erro ao transferir imagem do sensor.");
 
-                            console.log("📸 Imagem capturada!");
-
-                            // Fecha e apaga LED
-                            try { ftrScanSetDiodesStatus(hDevice, 0, 0); } catch(e) {}
-                            ftrScanCloseDevice(hDevice);
-
-                            // --- GERAÇÃO DO BMP PARA O NAVEGADOR ---
-                            const bmpHeader = createBMPHeader(width, height);
+                            // Processamento da Imagem
+                            const bmpHeader = createBMPHeader(FRAME_WIDTH, FRAME_HEIGHT);
                             const finalBuffer = Buffer.concat([bmpHeader, Buffer.from(imageBuffer)]);
                             const base64Image = finalBuffer.toString('base64');
 
-                            // Retorno de Sucesso
+                            // Limpeza
+                            try { ftrFuncs.setDiodesStatus(hDevice, 0, 0); } catch(e) {}
+                            ftrFuncs.closeDevice(hDevice);
+
+                            // Retorno Profissional
                             resolve({
-                                msg: "Sucesso",
-                                width: width,
-                                height: height,
+                                status: constants.FUTRONIC.STATUS_OK,
+                                // Na versão final, aqui enviariamos o template matemático.
+                                // Por enquanto, enviamos a imagem Base64 como "template" para salvar no banco.
+                                template: base64Image,
                                 image: `data:image/bmp;base64,${base64Image}`,
-                                // Aqui futuramente enviaremos o template real
-                                template: "TEMPLATE_FUTRONIC_MOCK_" + Date.now()
+                                metadata: {
+                                    width: FRAME_WIDTH,
+                                    height: FRAME_HEIGHT,
+                                    device: "FS88H"
+                                }
                             });
 
                         } catch (captureErr) {
-                            // Tenta fechar em caso de erro na captura
-                            try { ftrScanCloseDevice(hDevice); } catch(e) {}
+                            try { ftrFuncs.closeDevice(hDevice); } catch(e) {}
                             reject(captureErr);
                         }
 
-                    } else {
-                        process.stdout.write(".");
-                    }
-
-                    if (attempts >= maxAttempts) {
+                    } else if (attempts >= constants.FUTRONIC.MAX_ATTEMPTS) {
                         clearInterval(checkFinger);
-                        try { ftrScanSetDiodesStatus(hDevice, 0, 0); } catch(e) {}
-                        ftrScanCloseDevice(hDevice);
-                        reject(new Error("Tempo esgotado."));
+                        try { ftrFuncs.setDiodesStatus(hDevice, 0, 0); } catch(e) {}
+                        ftrFuncs.closeDevice(hDevice);
+                        reject(new Error("Tempo limite excedido. Nenhum dedo detectado."));
                     }
-                }, 500);
+                }, constants.FUTRONIC.POLLING_INTERVAL_MS);
 
             } catch (err) {
-                if (hDevice) try { ftrScanCloseDevice(hDevice); } catch(e) {}
-                reject(new Error("Erro interno: " + err.message));
+                if (hDevice) try { ftrFuncs.closeDevice(hDevice); } catch(e) {}
+                reject(new Error("Erro interno do driver: " + err.message));
             }
         });
     }
 };
-
-// --- FUNÇÃO AUXILIAR DE BMP (Essencial para ver a imagem) ---
-function createBMPHeader(width, height) {
-    // Cabeçalho padrão BMP Grayscale (copie exatamente assim)
-    const fileSize = 54 + 1024 + (width * height);
-    const buffer = Buffer.alloc(1078);
-
-    // BMP Header
-    buffer.write('BM');
-    buffer.writeUInt32LE(fileSize, 2);
-    buffer.writeUInt32LE(54 + 1024, 10); // Offset
-
-    // DIB Header
-    buffer.writeUInt32LE(40, 14);
-    buffer.writeUInt32LE(width, 18);
-    // Altura negativa para corrigir imagem invertida (padrão top-down)
-    buffer.writeInt32LE(-height, 22);
-    buffer.writeUInt16LE(1, 26); // Planes
-    buffer.writeUInt16LE(8, 28); // 8-bit
-    buffer.writeUInt32LE(0, 30); // No compression
-    buffer.writeUInt32LE(width * height, 34);
-    buffer.writeUInt32LE(0, 46); // Colors used
-
-    // Paleta de Cores (Grayscale)
-    for (let i = 0; i < 256; i++) {
-        const offset = 54 + i * 4;
-        buffer[offset] = i;     // Blue
-        buffer[offset + 1] = i; // Green
-        buffer[offset + 2] = i; // Red
-        buffer[offset + 3] = 0; // Alpha
-    }
-    return buffer;
-}
