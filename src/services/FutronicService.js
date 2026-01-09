@@ -1,6 +1,7 @@
 const koffi = require('koffi');
 const config = require('../config/appConfig');
 const constants = require('../config/constants');
+const logger = require('../utils/logger');
 const fs = require('fs');
 
 // --- Definição de Tipos e DLL ---
@@ -11,7 +12,7 @@ let ftrFuncs = {}; // Objeto para guardar as funções carregadas
 function loadDriver() {
     try {
         if (!fs.existsSync(config.dllPath)) {
-            console.warn(`[Driver] DLL não encontrada em: ${config.dllPath}`);
+            logger.warn('DRIVER', `DLL não encontrada em: ${config.dllPath}`);
             return false;
         }
 
@@ -25,10 +26,11 @@ function loadDriver() {
             setDiodesStatus: libFutronic.func('bool ftrScanSetDiodesStatus(void* hDevice, char byGreen, char byRed)'),
             getImage: libFutronic.func('bool ftrScanGetImage(void* hDevice, int nDose, _Out_ uint8_t* pBuffer)')
         };
-
+        
+        logger.info('DRIVER', 'DLL Futronic carregada com sucesso.');
         return true;
     } catch (error) {
-        console.error("[Driver] Erro crítico ao carregar DLL:", error.message);
+        logger.error('DRIVER', "Erro crítico ao carregar DLL:", error.message);
         return false;
     }
 }
@@ -69,7 +71,7 @@ module.exports = {
     capturarDigital: async () => {
         // Modo Mock (Desenvolvimento)
         if (config.useMock || !isDriverLoaded) {
-            console.log("[Mock] Simulando captura...");
+            logger.warn('DRIVER', "Modo Mock ativado ou Driver não carregado. Simulando captura...");
             return new Promise(resolve => setTimeout(() => {
                 resolve({
                     status: constants.FUTRONIC.STATUS_OK,
@@ -93,9 +95,12 @@ module.exports = {
                 // 2. Feedback Visual (LED)
                 try {
                     ftrFuncs.setDiodesStatus(hDevice, constants.FUTRONIC.LED_INTENSITY, 0);
-                } catch (e) { /* Ignora erro de LED */ }
+                } catch (e) { 
+                    logger.debug('DRIVER', `Falha ao acender LED: ${e.message}`);
+                }
 
                 let attempts = 0;
+                logger.info('DRIVER', 'Aguardando dedo no sensor...');
 
                 // 3. Loop de Espera (Polling)
                 const checkFinger = setInterval(() => {
@@ -105,6 +110,7 @@ module.exports = {
 
                     if (hasFinger) {
                         clearInterval(checkFinger);
+                        logger.info('DRIVER', 'Dedo detectado! Capturando...');
 
                         // --- Captura Real ---
                         try {
@@ -123,7 +129,11 @@ module.exports = {
                             const base64Image = finalBuffer.toString('base64');
 
                             // Limpeza
-                            try { ftrFuncs.setDiodesStatus(hDevice, 0, 0); } catch(e) {}
+                            try { 
+                                ftrFuncs.setDiodesStatus(hDevice, 0, 0); 
+                            } catch(e) {
+                                logger.debug('DRIVER', 'Erro ao apagar LED');
+                            }
                             ftrFuncs.closeDevice(hDevice);
 
                             // Retorno Profissional
@@ -142,6 +152,7 @@ module.exports = {
 
                         } catch (captureErr) {
                             try { ftrFuncs.closeDevice(hDevice); } catch(e) {}
+                            logger.error('DRIVER', 'Erro durante captura de imagem', captureErr.message);
                             reject(captureErr);
                         }
 
@@ -149,12 +160,14 @@ module.exports = {
                         clearInterval(checkFinger);
                         try { ftrFuncs.setDiodesStatus(hDevice, 0, 0); } catch(e) {}
                         ftrFuncs.closeDevice(hDevice);
+                        logger.warn('DRIVER', 'Timeout: Nenhum dedo detectado.');
                         reject(new Error("Tempo limite excedido. Nenhum dedo detectado."));
                     }
                 }, constants.FUTRONIC.POLLING_INTERVAL_MS);
 
             } catch (err) {
                 if (hDevice) try { ftrFuncs.closeDevice(hDevice); } catch(e) {}
+                logger.error('DRIVER', 'Erro interno do driver', err.message);
                 reject(new Error("Erro interno do driver: " + err.message));
             }
         });

@@ -13,5 +13,10 @@ module.exports = {
         STATUS_OK: "SUCCESS",
         STATUS_ERROR: "ERROR",
         STATUS_TIMEOUT: "TIMEOUT"
+    },
+    PYTHON_ENGINE: {
+        HOST: '127.0.0.1',
+        PORT: 5000,
+        BASE_URL: 'http://127.0.0.1:5000'
     }
 };

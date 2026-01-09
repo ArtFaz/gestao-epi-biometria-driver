@@ -1,24 +1,76 @@
 const FutronicService = require('../services/FutronicService');
+const axios = require('axios/dist/node/axios.cjs');
+
+const PYTHON_API = 'http://127.0.0.1:5000';
 
 module.exports = {
-    async capturar(req, res) {
+    // CASO DE USO 1: CADASTRAR FUNCIONÁRIO
+    async capturarParaCadastro(req, res) {
         try {
-            console.log("👆 Recebida solicitação de leitura biométrica.");
+            console.log("1. Node: Solicitando captura ao Hardware...");
 
-            const template = await FutronicService.capturarDigital();
+            // A. Captura imagem bruta (BMP/Base64) do Hardware
+            const dadosHardware = await FutronicService.capturarDigital();
 
+            console.log("2. Node: Enviando imagem para o Python extrair template...");
+
+            // B. Envia para o Python processar
+            // O FutronicService retorna { image: "data:image/bmp;base64,..." }
+            const responsePython = await axios.post(`${PYTHON_API}/extract`, {
+                image_base64: dadosHardware.image
+            });
+
+            console.log("3. Node: Template recebido. Retornando ao Frontend.");
+
+            // C. Retorna tudo para o Frontend React
             return res.json({
                 success: true,
-                template: template,
-                message: "Digital capturada com sucesso."
+                // Imagem para mostrar no Modal (Preview)
+                image_preview: dadosHardware.image,
+                // Template para salvar no SQL Server (Escondido do usuário)
+                template_final: responsePython.data.template
             });
 
         } catch (error) {
-            console.error("❌ Erro na captura:", error.message);
+            console.error("Erro no fluxo de cadastro:", error.message);
             return res.status(500).json({
                 success: false,
-                error: error.message
+                error: error.message,
+                details: error.response?.data || "Erro interno"
             });
+        }
+    },
+
+    // CASO DE USO 2: ENTREGAR EPI (MATCH)
+    async validarEntrega(req, res) {
+        try {
+            // O Frontend envia o template que estava salvo no banco
+            const { templateSalvoNoBanco } = req.body;
+
+            if (!templateSalvoNoBanco) {
+                return res.status(400).json({ error: "Template do banco não fornecido" });
+            }
+
+            console.log("1. Node: Solicitando captura para validação...");
+            const dadosHardware = await FutronicService.capturarDigital();
+
+            console.log("2. Node: Enviando par (Template + Nova Imagem) para o Python...");
+            const responsePython = await axios.post(`${PYTHON_API}/match`, {
+                template_stored: templateSalvoNoBanco,
+                image_new_base64: dadosHardware.image
+            });
+
+            console.log(`3. Node: Resultado do Match: ${responsePython.data.match}`);
+
+            return res.json({
+                success: true,
+                match: responsePython.data.match, // true ou false
+                score: responsePython.data.score
+            });
+
+        } catch (error) {
+            console.error("Erro no fluxo de validação:", error.message);
+            return res.status(500).json({ success: false, error: error.message });
         }
     }
 };
