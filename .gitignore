@@ -141,7 +141,6 @@ vite.config.ts.timestamp-*
 #Idea
 .idea/
 
-#bin - Temporario apenas para fazer o up pro git
-bin/
+
 driver-manager.exe
 python-core/build/bio-engine
