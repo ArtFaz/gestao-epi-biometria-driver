@@ -1,7 +1,8 @@
 const FutronicService = require('../services/FutronicService');
 const axios = require('axios/dist/node/axios.cjs');
+const config = require('../config/appConfig');
 
-const PYTHON_API = 'http://127.0.0.1:5000';
+const PYTHON_API = config.pythonApiUrl;
 
 module.exports = {
     // CASO DE USO 1: CADASTRAR FUNCIONÁRIO

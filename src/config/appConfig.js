@@ -5,11 +5,8 @@ const path = require('path');
 const basePath = process.pkg ? path.dirname(process.execPath) : path.resolve(__dirname, '../../bin');
 
 module.exports = {
-
     port: process.env.PORT || 4001,
-
-    // Agora a DLL sempre será buscada relativa ao executável ou raiz
-
-    dllPath: path.join(basePath, 'ftrScanAPI.dll')
-
+    dllPath: path.join(basePath, 'ftrScanAPI.dll'),
+    pythonApiUrl: process.env.PYTHON_API_URL || 'http://127.0.0.1:5000',
+    env: process.env.NODE_ENV || 'development'
 };
