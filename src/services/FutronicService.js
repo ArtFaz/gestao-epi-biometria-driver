@@ -15,6 +15,11 @@ class FutronicDriver {
     }
 
     init() {
+        if (config.useMock) {
+            logger.info('DRIVER', '⚠️ INICIADO EM MODO MOCK (Simulação de Hardware) ⚠️');
+            return;
+        }
+
         try {
             if (!fs.existsSync(config.dllPath)) {
                 logger.warn('DRIVER', `DLL não encontrada em: ${config.dllPath}`);
@@ -159,13 +164,14 @@ class FutronicDriver {
     async mockCapture() {
         logger.warn('DRIVER', "Modo Mock ativado. Simulando...");
         this.isScanning = true;
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 1500)); // Simula tempo de leitura
         this.isScanning = false;
         
         return {
             status: constants.FUTRONIC.STATUS_OK,
             template: "MOCK_TEMPLATE_" + Date.now(),
-            image: null 
+            image: "data:image/bmp;base64,Qk2eAAAAAAAAAD4AAAAoAAAACAAAAAgAAAABAAEAAAAAACAAAAAAAAAAAAAAAP///wD///8A////AP///wD///8A////AP///wD///8AAAAA", // Um quadrado preto 8x8 válido
+            isMock: true
         };
     }
 }

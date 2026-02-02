@@ -13,6 +13,16 @@ module.exports = {
             // A. Captura imagem bruta (BMP/Base64) do Hardware
             const dadosHardware = await FutronicService.capturarDigital();
 
+            // --- MOCK BYPASS ---
+            if (dadosHardware.isMock) {
+                console.log("⚠️ MOCK DETECTADO: Pulando processamento Python.");
+                return res.json({
+                    success: true,
+                    image_preview: dadosHardware.image,
+                    template_final: `MOCK_TEMPLATE|${Date.now()}`
+                });
+            }
+
             console.log("2. Node: Enviando imagem para o Python extrair template...");
 
             // B. Envia para o Python processar
@@ -54,6 +64,16 @@ module.exports = {
 
             console.log("1. Node: Solicitando captura para validação...");
             const dadosHardware = await FutronicService.capturarDigital();
+
+            // --- MOCK BYPASS ---
+            if (dadosHardware.isMock) {
+                console.log("⚠️ MOCK DETECTADO: Simulando Match Positivo.");
+                return res.json({
+                    success: true,
+                    match: true,
+                    score: 99
+                });
+            }
 
             console.log("2. Node: Enviando par (Template + Nova Imagem) para o Python...");
             const responsePython = await axios.post(`${PYTHON_API}/match`, {
